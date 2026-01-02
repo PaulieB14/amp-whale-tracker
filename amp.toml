@@ -1,0 +1,32 @@
+# Amp Configuration for Whale Tracker Demo
+# Copy this file and update with your settings
+
+# PostgreSQL metadata database
+metadata_db_url = "postgresql://postgres:postgres@localhost:5432/amp"
+
+# HTTP server settings
+[http]
+bind = "0.0.0.0:1603"
+cors_origins = ["http://localhost:8501", "http://127.0.0.1:8501"]
+
+# Ethereum provider configuration
+[[providers]]
+name = "ethereum"
+chain_id = 1
+# Replace with your Ethereum RPC endpoint
+rpc_url = "https://eth-mainnet.alchemyapi.io/v2/YOUR_API_KEY_HERE"
+# Alternative free options:
+# rpc_url = "https://ethereum.publicnode.com"
+# rpc_url = "https://rpc.ankr.com/eth"
+
+# Enable Ethereum RPC dataset for transaction data
+[[datasets]]
+name = "eth_rpc"
+provider = "ethereum"
+start_block = "latest"  # Start from latest block for demo
+
+# Optional: Enable additional datasets
+# [[datasets]]
+# name = "uniswap_v3"
+# provider = "ethereum"
+# start_block = "latest"
