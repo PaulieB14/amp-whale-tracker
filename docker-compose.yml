@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  # PostgreSQL for Amp metadata
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: amp
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Whale Tracker Dashboard
+  whale-tracker:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      - AMP_URL=http://host.docker.internal:1603
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    working_dir: /app
+
+volumes:
+  postgres_data:
