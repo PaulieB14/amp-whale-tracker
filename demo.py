@@ -2,6 +2,8 @@
 """
 Quick demo script to test Amp connection and show sample whale data.
 Run this before starting the full dashboard to verify everything works.
+
+UPDATED: Fixed for modern Amp API compatibility
 """
 
 import requests
@@ -29,18 +31,18 @@ def test_amp_connection(amp_url="http://localhost:1603"):
 def get_sample_data(amp_url="http://localhost:1603"):
     """Get sample blockchain data to verify datasets are working"""
     try:
-        # Query for recent transactions (any size)
+        # Query for recent transactions (any size) - FIXED for modern Amp
         query = """
         SELECT 
-            block_number,
+            block_num,
             block_timestamp,
-            transaction_hash,
+            hash as transaction_hash,
             from_address,
             to_address,
-            value / 1e18 as eth_amount
-        FROM "ethereum/eth_rpc".transactions 
+            CAST(value AS DOUBLE) / 1e18 as eth_amount
+        FROM "ethereum/eth_rpc@latest".transactions 
         WHERE to_address IS NOT NULL
-        ORDER BY block_number DESC 
+        ORDER BY block_num DESC 
         LIMIT 10
         """
         
@@ -58,26 +60,30 @@ def get_sample_data(amp_url="http://localhost:1603"):
         df = pd.DataFrame(data)
         print(f"✅ Found {len(df)} recent transactions!")
         print("\nSample data:")
-        print(df[['block_number', 'eth_amount', 'from_address']].head())
+        print(df[['block_num', 'eth_amount', 'from_address']].head())
         
         return df
         
     except Exception as e:
         print(f"❌ Error querying transaction data: {e}")
         print("   This usually means the eth_rpc dataset isn't ready yet.")
+        print("   Common issues:")
+        print("   - Dataset name should include @latest or @version")
+        print("   - Use block_num not block_number")
+        print("   - Numeric operations need CAST(value AS DOUBLE)")
         return None
 
 def check_whale_data(amp_url="http://localhost:1603"):
-    """Check for actual whale transfers"""
+    """Check for actual whale transfers - FIXED for modern Amp"""
     try:
         query = """
         SELECT 
             COUNT(*) as whale_count,
-            MAX(value / 1e18) as largest_transfer,
-            AVG(value / 1e18) as avg_transfer
-        FROM "ethereum/eth_rpc".transactions 
-        WHERE value >= 50000000000000000000
-        AND block_timestamp > NOW() - INTERVAL '24 hours'
+            MAX(CAST(value AS DOUBLE) / 1e18) as largest_transfer,
+            AVG(CAST(value AS DOUBLE) / 1e18) as avg_transfer
+        FROM "ethereum/eth_rpc@latest".transactions 
+        WHERE CAST(value AS DOUBLE) >= 50000000000000000000
+        AND block_timestamp > CURRENT_TIMESTAMP - INTERVAL '24' HOUR
         AND to_address IS NOT NULL
         """
         
@@ -125,7 +131,9 @@ def main():
         print("\n💡 If no data is found:")
         print("   - Amp may still be syncing blockchain data")
         print("   - Check your RPC endpoint in amp.toml")
+        print("   - Verify dataset name uses @latest: 'ethereum/eth_rpc@latest'")
         print("   - Wait a few minutes and try again")
+        print("\n📝 See FIXES.md for SQL query examples and troubleshooting")
         return
     
     # Test 3: Whale data
@@ -137,6 +145,7 @@ def main():
     print("   1. Run the dashboard: streamlit run whale_tracker.py")
     print("   2. Open http://localhost:8501 in your browser")
     print("   3. Adjust the minimum ETH threshold if needed")
+    print("\n📝 If you see errors, check FIXES.md for troubleshooting")
 
 if __name__ == "__main__":
     main()
