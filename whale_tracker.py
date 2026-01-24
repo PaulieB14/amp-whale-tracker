@@ -4,6 +4,8 @@ Powered by Amp - SQL queries on blockchain data
 
 This dashboard tracks large Ethereum transfers in real-time using Amp's
 blockchain-native database capabilities.
+
+UPDATED: Fixed for modern Amp API compatibility
 """
 
 import streamlit as st
@@ -78,17 +80,17 @@ def get_whale_transfers(client: AmpClient, min_eth: float = 50, hours: int = 1) 
     query = f"""
     SELECT 
         block_timestamp,
-        block_number,
-        transaction_hash,
+        block_num as block_number,
+        hash as transaction_hash,
         from_address,
         to_address,
-        value / 1e18 as eth_amount,
-        gas_price / 1e9 as gas_gwei,
+        CAST(value AS DOUBLE) / 1e18 as eth_amount,
+        CAST(gas_price AS DOUBLE) / 1e9 as gas_gwei,
         gas_used,
-        (gas_price * gas_used) / 1e18 as gas_fee_eth
-    FROM "ethereum/eth_rpc".transactions 
-    WHERE value >= {min_eth * 1e18}
-    AND block_timestamp > NOW() - INTERVAL '{hours} hours'
+        (CAST(gas_price AS DOUBLE) * CAST(gas_used AS DOUBLE)) / 1e18 as gas_fee_eth
+    FROM "ethereum/eth_rpc@latest".transactions 
+    WHERE CAST(value AS DOUBLE) >= {min_eth * 1e18}
+    AND block_timestamp > CURRENT_TIMESTAMP - INTERVAL '{hours}' HOUR
     AND to_address IS NOT NULL
     ORDER BY block_timestamp DESC 
     LIMIT 200
@@ -103,12 +105,12 @@ def get_top_whale_addresses(client: AmpClient, hours: int = 24) -> pd.DataFrame:
     SELECT 
         from_address,
         COUNT(*) as transfer_count,
-        SUM(value / 1e18) as total_eth_sent,
-        AVG(value / 1e18) as avg_eth_per_transfer,
-        MAX(value / 1e18) as largest_transfer
-    FROM "ethereum/eth_rpc".transactions 
-    WHERE value >= 50000000000000000000
-    AND block_timestamp > NOW() - INTERVAL '{hours} hours'
+        SUM(CAST(value AS DOUBLE) / 1e18) as total_eth_sent,
+        AVG(CAST(value AS DOUBLE) / 1e18) as avg_eth_per_transfer,
+        MAX(CAST(value AS DOUBLE) / 1e18) as largest_transfer
+    FROM "ethereum/eth_rpc@latest".transactions 
+    WHERE CAST(value AS DOUBLE) >= 50000000000000000000
+    AND block_timestamp > CURRENT_TIMESTAMP - INTERVAL '{hours}' HOUR
     AND to_address IS NOT NULL
     GROUP BY from_address
     HAVING COUNT(*) >= 2
@@ -162,7 +164,7 @@ def main():
     
     # Auto refresh logic
     if auto_refresh:
-        time.sleep(0.1)  # Small delay to prevent too frequent updates
+        time.sleep(30)
         st.rerun()
     
     # Fetch data
@@ -173,6 +175,7 @@ def main():
     if df_transfers.empty:
         st.warning("⚠️ No whale transfers found. Check your Amp server connection or try lowering the minimum ETH amount.")
         st.info("💡 Make sure your Amp server is running and has Ethereum data indexed.")
+        st.info("📝 See FIXES.md for troubleshooting and SQL query examples.")
         return
     
     # Convert timestamp to datetime if it's a string
