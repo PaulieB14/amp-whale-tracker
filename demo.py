@@ -33,16 +33,16 @@ def get_sample_data(amp_url="http://localhost:1603"):
     try:
         # Query for recent transactions (any size) - FIXED for modern Amp
         query = """
-        SELECT 
+        SELECT
             block_num,
-            block_timestamp,
-            hash as transaction_hash,
-            from_address,
-            to_address,
+            timestamp,
+            tx_hash as transaction_hash,
+            "from" as from_address,
+            "to" as to_address,
             CAST(value AS DOUBLE) / 1e18 as eth_amount
-        FROM "ethereum/eth_rpc@latest".transactions 
-        WHERE to_address IS NOT NULL
-        ORDER BY block_num DESC 
+        FROM "ethereum/eth_rpc@latest".transactions
+        WHERE "to" IS NOT NULL
+        ORDER BY block_num DESC
         LIMIT 10
         """
         
@@ -77,14 +77,13 @@ def check_whale_data(amp_url="http://localhost:1603"):
     """Check for actual whale transfers - FIXED for modern Amp"""
     try:
         query = """
-        SELECT 
+        SELECT
             COUNT(*) as whale_count,
             MAX(CAST(value AS DOUBLE) / 1e18) as largest_transfer,
             AVG(CAST(value AS DOUBLE) / 1e18) as avg_transfer
-        FROM "ethereum/eth_rpc@latest".transactions 
+        FROM "ethereum/eth_rpc@latest".transactions
         WHERE CAST(value AS DOUBLE) >= 50000000000000000000
-        AND block_timestamp > CURRENT_TIMESTAMP - INTERVAL '24' HOUR
-        AND to_address IS NOT NULL
+        AND "to" IS NOT NULL
         """
         
         response = requests.post(amp_url, data=query, timeout=30)

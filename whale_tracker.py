@@ -1,21 +1,15 @@
 """
 🐋 Ethereum Whale Tracker Dashboard
 Powered by Amp - SQL queries on blockchain data
-
-This dashboard tracks large Ethereum transfers in real-time using Amp's
-blockchain-native database capabilities.
-
-UPDATED: Fixed for modern Amp API compatibility
 """
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime
 import requests
 import json
-from typing import Optional
 import time
 
 # Configure Streamlit page
@@ -26,12 +20,35 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Custom CSS for better styling
+st.markdown("""
+<style>
+    .metric-card {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border-radius: 10px;
+        padding: 20px;
+        border: 1px solid #0f3460;
+    }
+    .big-number {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #00d4ff;
+    }
+    .stMetric > div {
+        background: linear-gradient(135deg, #1e3a5f 0%, #0d1b2a 100%);
+        border-radius: 10px;
+        padding: 15px;
+        border: 1px solid #1e88e5;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 class AmpClient:
     """Simple Amp client for querying blockchain data"""
-    
+
     def __init__(self, base_url: str = "http://localhost:1603"):
         self.base_url = base_url.rstrip('/')
-    
+
     def query(self, sql: str) -> pd.DataFrame:
         """Execute SQL query against Amp and return DataFrame"""
         try:
@@ -42,16 +59,15 @@ class AmpClient:
                 timeout=30
             )
             response.raise_for_status()
-            
-            # Parse JSONL response
+
             lines = response.text.strip().split('\n')
             data = [json.loads(line) for line in lines if line.strip()]
-            
+
             if not data:
                 return pd.DataFrame()
-                
+
             return pd.DataFrame(data)
-            
+
         except requests.exceptions.RequestException as e:
             st.error(f"Failed to connect to Amp server: {e}")
             return pd.DataFrame()
@@ -62,284 +78,313 @@ class AmpClient:
 def format_address(address: str) -> str:
     """Format Ethereum address for display"""
     if not address or len(address) < 10:
-        return address
+        return str(address)
     return f"{address[:6]}...{address[-4:]}"
 
-def format_eth_amount(amount: float) -> str:
-    """Format ETH amount with appropriate precision"""
-    if amount >= 1000:
-        return f"{amount:,.0f} ETH"
+def format_eth(amount: float) -> str:
+    """Format ETH amount"""
+    if amount >= 10000:
+        return f"{amount/1000:,.1f}K"
+    elif amount >= 1000:
+        return f"{amount:,.0f}"
     elif amount >= 100:
-        return f"{amount:,.1f} ETH"
+        return f"{amount:,.1f}"
     else:
-        return f"{amount:,.2f} ETH"
+        return f"{amount:,.2f}"
 
-def get_whale_transfers(client: AmpClient, min_eth: float = 50, hours: int = 1) -> pd.DataFrame:
-    """Query for large ETH transfers (whale activity)"""
-    
+def get_whale_transfers(client: AmpClient, min_eth: float = 50) -> pd.DataFrame:
+    """Query for large ETH transfers"""
     query = f"""
-    SELECT 
-        block_timestamp,
-        block_num as block_number,
-        hash as transaction_hash,
-        from_address,
-        to_address,
-        CAST(value AS DOUBLE) / 1e18 as eth_amount,
-        CAST(gas_price AS DOUBLE) / 1e9 as gas_gwei,
-        gas_used,
-        (CAST(gas_price AS DOUBLE) * CAST(gas_used AS DOUBLE)) / 1e18 as gas_fee_eth
-    FROM "ethereum/eth_rpc@latest".transactions 
+    SELECT
+        timestamp,
+        block_num,
+        tx_hash as transaction_hash,
+        "from" as from_address,
+        "to" as to_address,
+        CAST(value AS DOUBLE) / 1e18 as eth_amount
+    FROM "ethereum/eth_rpc@latest".transactions
     WHERE CAST(value AS DOUBLE) >= {min_eth * 1e18}
-    AND block_timestamp > CURRENT_TIMESTAMP - INTERVAL '{hours}' HOUR
-    AND to_address IS NOT NULL
-    ORDER BY block_timestamp DESC 
-    LIMIT 200
+    AND "to" IS NOT NULL
+    ORDER BY CAST(value AS DOUBLE) DESC
+    LIMIT 500
     """
-    
     return client.query(query)
 
-def get_top_whale_addresses(client: AmpClient, hours: int = 24) -> pd.DataFrame:
-    """Get top whale addresses by total volume"""
-    
-    query = f"""
-    SELECT 
-        from_address,
+def get_whale_stats(client: AmpClient) -> pd.DataFrame:
+    """Get aggregate whale statistics"""
+    query = """
+    SELECT
+        "from" as from_address,
         COUNT(*) as transfer_count,
-        SUM(CAST(value AS DOUBLE) / 1e18) as total_eth_sent,
-        AVG(CAST(value AS DOUBLE) / 1e18) as avg_eth_per_transfer,
+        SUM(CAST(value AS DOUBLE) / 1e18) as total_eth,
         MAX(CAST(value AS DOUBLE) / 1e18) as largest_transfer
-    FROM "ethereum/eth_rpc@latest".transactions 
+    FROM "ethereum/eth_rpc@latest".transactions
     WHERE CAST(value AS DOUBLE) >= 50000000000000000000
-    AND block_timestamp > CURRENT_TIMESTAMP - INTERVAL '{hours}' HOUR
-    AND to_address IS NOT NULL
-    GROUP BY from_address
-    HAVING COUNT(*) >= 2
-    ORDER BY total_eth_sent DESC 
-    LIMIT 20
+    AND "to" IS NOT NULL
+    GROUP BY "from"
+    ORDER BY total_eth DESC
+    LIMIT 15
     """
-    
     return client.query(query)
 
 def main():
-    # Header
-    st.title("🐋 Ethereum Whale Tracker")
-    st.markdown("**Real-time large ETH transfers powered by Amp's blockchain database**")
-    
-    # Sidebar controls
-    st.sidebar.header("⚙️ Settings")
-    
-    # Amp server configuration
-    amp_url = st.sidebar.text_input(
-        "Amp Server URL", 
-        value="http://localhost:1603",
-        help="URL of your Amp server"
-    )
-    
-    # Query parameters
-    min_eth = st.sidebar.slider(
-        "Minimum ETH Amount", 
-        min_value=10.0, 
-        max_value=1000.0, 
-        value=50.0, 
-        step=10.0,
-        help="Minimum ETH amount to be considered a 'whale' transfer"
-    )
-    
-    time_range = st.sidebar.selectbox(
-        "Time Range",
-        options=[1, 2, 6, 12, 24],
-        index=2,
-        format_func=lambda x: f"Last {x} hour{'s' if x > 1 else ''}",
-        help="How far back to look for whale transfers"
-    )
-    
-    auto_refresh = st.sidebar.checkbox(
-        "Auto Refresh (30s)", 
-        value=False,
-        help="Automatically refresh data every 30 seconds"
-    )
-    
-    # Initialize client
+    # Header with gradient
+    st.markdown("""
+    <div style="text-align: center; padding: 20px 0;">
+        <h1 style="background: linear-gradient(90deg, #00d4ff, #7c3aed); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-size: 3rem;">
+            🐋 Ethereum Whale Tracker
+        </h1>
+        <p style="color: #888; font-size: 1.1rem;">Real-time large ETH transfers powered by Amp</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Sidebar
+    with st.sidebar:
+        st.header("⚙️ Settings")
+
+        amp_url = st.text_input(
+            "Amp Server URL",
+            value="http://localhost:1603",
+            help="URL of your Amp server"
+        )
+
+        min_eth = st.slider(
+            "Minimum ETH",
+            min_value=10,
+            max_value=500,
+            value=50,
+            step=10,
+            help="Minimum ETH to track"
+        )
+
+        auto_refresh = st.checkbox("Auto Refresh (30s)", value=False)
+
+        if st.button("🔄 Refresh Now", use_container_width=True):
+            st.rerun()
+
     client = AmpClient(amp_url)
-    
-    # Auto refresh logic
+
     if auto_refresh:
         time.sleep(30)
         st.rerun()
-    
+
     # Fetch data
-    with st.spinner("🔍 Scanning blockchain for whale activity..."):
-        df_transfers = get_whale_transfers(client, min_eth, time_range)
-        df_whales = get_top_whale_addresses(client, time_range * 2)  # Longer period for whale stats
-    
-    if df_transfers.empty:
-        st.warning("⚠️ No whale transfers found. Check your Amp server connection or try lowering the minimum ETH amount.")
-        st.info("💡 Make sure your Amp server is running and has Ethereum data indexed.")
-        st.info("📝 See FIXES.md for troubleshooting and SQL query examples.")
+    with st.spinner("🔍 Scanning blockchain..."):
+        df = get_whale_transfers(client, min_eth)
+        df_stats = get_whale_stats(client)
+
+    if df.empty:
+        st.error("⚠️ No whale transfers found. Check Amp server connection.")
         return
-    
-    # Convert timestamp to datetime if it's a string
-    if not df_transfers.empty and 'block_timestamp' in df_transfers.columns:
-        df_transfers['block_timestamp'] = pd.to_datetime(df_transfers['block_timestamp'])
-    
-    # Main metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
+
+    # Convert timestamp
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+    # Show data range
+    min_time = df['timestamp'].min()
+    max_time = df['timestamp'].max()
+    st.markdown(f"""
+    <div style="text-align: center; padding: 10px; background: linear-gradient(90deg, rgba(0,212,255,0.1), rgba(124,58,237,0.1)); border-radius: 10px; margin-bottom: 20px;">
+        <span style="color: #00d4ff; font-weight: bold;">📅 Data Range:</span>
+        <span style="color: #fff;">{min_time.strftime('%b %d, %Y %H:%M')} → {max_time.strftime('%b %d, %Y %H:%M')} UTC</span>
+        <span style="color: #888; margin-left: 15px;">({len(df):,} transfers)</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Key Metrics Row
+    st.markdown("### 📊 Key Metrics")
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric("🐋 Whale Transfers", f"{len(df):,}")
+    with c2:
+        st.metric("💰 Total Volume", f"{df['eth_amount'].sum():,.0f} ETH")
+    with c3:
+        st.metric("📈 Average Size", f"{df['eth_amount'].mean():,.0f} ETH")
+    with c4:
+        st.metric("🚀 Largest", f"{df['eth_amount'].max():,.0f} ETH")
+
+    st.markdown("---")
+
+    # Main Charts
+    col1, col2 = st.columns([2, 1])
+
     with col1:
-        st.metric(
-            "🐋 Whale Transfers", 
-            len(df_transfers),
-            help="Number of large transfers found"
+        st.markdown("### 📈 Transfer Activity")
+
+        # Create bubble chart
+        fig = go.Figure()
+
+        # Color scale based on ETH amount
+        colors = df['eth_amount']
+
+        fig.add_trace(go.Scatter(
+            x=df['timestamp'],
+            y=df['eth_amount'],
+            mode='markers',
+            marker=dict(
+                size=df['eth_amount'].apply(lambda x: min(max(x/50, 8), 50)),
+                color=colors,
+                colorscale='Viridis',
+                showscale=True,
+                colorbar=dict(title="ETH"),
+                line=dict(width=1, color='white')
+            ),
+            text=df.apply(lambda r: f"<b>{format_eth(r['eth_amount'])} ETH</b><br>From: {format_address(r['from_address'])}<br>To: {format_address(r['to_address'])}", axis=1),
+            hoverinfo='text',
+            name='Transfers'
+        ))
+
+        fig.update_layout(
+            height=450,
+            xaxis_title="Time",
+            yaxis_title="ETH Amount",
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='white'),
+            xaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True),
+            yaxis=dict(gridcolor='rgba(128,128,128,0.2)', showgrid=True, type='log'),
+            margin=dict(l=50, r=50, t=30, b=50),
+            hoverlabel=dict(bgcolor="rgba(0,0,0,0.8)", font_size=12)
         )
-    
+
+        st.plotly_chart(fig, use_container_width=True)
+
     with col2:
-        total_eth = df_transfers['eth_amount'].sum() if not df_transfers.empty else 0
-        st.metric(
-            "💰 Total ETH Moved", 
-            format_eth_amount(total_eth),
-            help="Total ETH in all whale transfers"
-        )
-    
-    with col3:
-        avg_eth = df_transfers['eth_amount'].mean() if not df_transfers.empty else 0
-        st.metric(
-            "📊 Average Transfer", 
-            format_eth_amount(avg_eth),
-            help="Average size of whale transfers"
-        )
-    
-    with col4:
-        max_eth = df_transfers['eth_amount'].max() if not df_transfers.empty else 0
-        st.metric(
-            "🚀 Largest Transfer", 
-            format_eth_amount(max_eth),
-            help="Biggest whale transfer found"
-        )
-    
-    # Charts section
-    st.header("📈 Whale Activity Analysis")
-    
-    # Time series chart
-    if not df_transfers.empty:
-        fig_timeline = px.scatter(
-            df_transfers, 
-            x='block_timestamp', 
-            y='eth_amount',
-            size='gas_fee_eth',
-            hover_data={
-                'from_address': True,
-                'to_address': True,
-                'transaction_hash': True,
-                'gas_gwei': ':.1f'
-            },
-            title="🕐 Whale Transfers Over Time",
-            labels={
-                'block_timestamp': 'Time',
-                'eth_amount': 'ETH Amount',
-                'gas_fee_eth': 'Gas Fee (ETH)'
-            }
-        )
-        
-        fig_timeline.update_layout(
-            height=400,
-            showlegend=False,
-            hovermode='closest'
-        )
-        
-        st.plotly_chart(fig_timeline, use_container_width=True)
-    
-    # Two column layout for additional charts
-    col_left, col_right = st.columns(2)
-    
-    with col_left:
-        if not df_transfers.empty:
-            # ETH amount distribution
-            fig_hist = px.histogram(
-                df_transfers, 
-                x='eth_amount', 
-                nbins=20,
-                title="📊 Transfer Size Distribution",
-                labels={'eth_amount': 'ETH Amount', 'count': 'Number of Transfers'}
-            )
-            fig_hist.update_layout(height=300)
-            st.plotly_chart(fig_hist, use_container_width=True)
-    
-    with col_right:
-        if not df_whales.empty:
-            # Top whales by volume
-            fig_whales = px.bar(
-                df_whales.head(10), 
-                x='total_eth_sent', 
-                y='from_address',
+        st.markdown("### 🏆 Top Whales")
+
+        if not df_stats.empty:
+            # Create horizontal bar chart
+            top_whales = df_stats.head(8)
+
+            fig_bar = go.Figure()
+
+            fig_bar.add_trace(go.Bar(
+                y=[format_address(addr) for addr in top_whales['from_address']],
+                x=top_whales['total_eth'],
                 orientation='h',
-                title="🐋 Top Whale Addresses",
-                labels={'total_eth_sent': 'Total ETH Sent', 'from_address': 'Address'}
+                marker=dict(
+                    color=top_whales['total_eth'],
+                    colorscale='Blues',
+                    line=dict(width=1, color='white')
+                ),
+                text=top_whales['total_eth'].apply(lambda x: f"{format_eth(x)} ETH"),
+                textposition='inside',
+                textfont=dict(color='white', size=11),
+                hovertemplate="<b>%{y}</b><br>Total: %{x:,.0f} ETH<extra></extra>"
+            ))
+
+            fig_bar.update_layout(
+                height=450,
+                xaxis_title="Total ETH",
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                font=dict(color='white'),
+                xaxis=dict(gridcolor='rgba(128,128,128,0.2)'),
+                yaxis=dict(autorange='reversed'),
+                margin=dict(l=100, r=20, t=30, b=50),
+                showlegend=False
             )
-            fig_whales.update_layout(height=300)
-            fig_whales.update_yaxis(tickmode='array', tickvals=list(range(len(df_whales.head(10)))), 
-                                   ticktext=[format_address(addr) for addr in df_whales.head(10)['from_address']])
-            st.plotly_chart(fig_whales, use_container_width=True)
-    
-    # Recent transfers table
-    st.header("🔍 Recent Whale Transfers")
-    
-    if not df_transfers.empty:
-        # Format the dataframe for display
-        display_df = df_transfers.copy()
-        display_df['from_address'] = display_df['from_address'].apply(format_address)
-        display_df['to_address'] = display_df['to_address'].apply(format_address)
-        display_df['eth_amount'] = display_df['eth_amount'].apply(format_eth_amount)
-        display_df['gas_gwei'] = display_df['gas_gwei'].round(1)
-        display_df['transaction_hash'] = display_df['transaction_hash'].apply(lambda x: format_address(x))
-        
-        # Select columns for display
-        columns_to_show = ['block_timestamp', 'eth_amount', 'from_address', 'to_address', 'gas_gwei', 'transaction_hash']
-        display_columns = [col for col in columns_to_show if col in display_df.columns]
-        
-        st.dataframe(
-            display_df[display_columns].head(50),
-            use_container_width=True,
-            column_config={
-                'block_timestamp': st.column_config.DatetimeColumn('Time', format='MMM DD, HH:mm:ss'),
-                'eth_amount': 'ETH Amount',
-                'from_address': 'From',
-                'to_address': 'To',
-                'gas_gwei': st.column_config.NumberColumn('Gas (Gwei)', format='%.1f'),
-                'transaction_hash': 'Tx Hash'
-            }
+
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+    # Distribution Chart
+    st.markdown("### 📊 Transfer Size Distribution")
+
+    col3, col4 = st.columns(2)
+
+    with col3:
+        # Histogram
+        fig_hist = go.Figure()
+
+        fig_hist.add_trace(go.Histogram(
+            x=df['eth_amount'],
+            nbinsx=30,
+            marker=dict(
+                color='rgba(0, 212, 255, 0.7)',
+                line=dict(width=1, color='white')
+            ),
+            hovertemplate="Range: %{x}<br>Count: %{y}<extra></extra>"
+        ))
+
+        fig_hist.update_layout(
+            height=300,
+            xaxis_title="ETH Amount",
+            yaxis_title="Count",
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='white'),
+            xaxis=dict(gridcolor='rgba(128,128,128,0.2)'),
+            yaxis=dict(gridcolor='rgba(128,128,128,0.2)'),
+            margin=dict(l=50, r=50, t=30, b=50)
         )
-    
-    # Whale leaderboard
-    if not df_whales.empty:
-        st.header("🏆 Whale Leaderboard")
-        
-        leaderboard_df = df_whales.copy()
-        leaderboard_df['from_address'] = leaderboard_df['from_address'].apply(format_address)
-        leaderboard_df['total_eth_sent'] = leaderboard_df['total_eth_sent'].apply(format_eth_amount)
-        leaderboard_df['avg_eth_per_transfer'] = leaderboard_df['avg_eth_per_transfer'].apply(format_eth_amount)
-        leaderboard_df['largest_transfer'] = leaderboard_df['largest_transfer'].apply(format_eth_amount)
-        
-        st.dataframe(
-            leaderboard_df,
-            use_container_width=True,
-            column_config={
-                'from_address': 'Whale Address',
-                'transfer_count': st.column_config.NumberColumn('# Transfers', format='%d'),
-                'total_eth_sent': 'Total ETH Sent',
-                'avg_eth_per_transfer': 'Avg per Transfer',
-                'largest_transfer': 'Largest Transfer'
-            }
+
+        st.plotly_chart(fig_hist, use_container_width=True)
+
+    with col4:
+        # Pie chart for size categories
+        df['size_category'] = pd.cut(
+            df['eth_amount'],
+            bins=[0, 100, 500, 1000, 5000, float('inf')],
+            labels=['50-100', '100-500', '500-1K', '1K-5K', '5K+']
         )
-    
+        size_counts = df['size_category'].value_counts()
+
+        fig_pie = go.Figure()
+
+        fig_pie.add_trace(go.Pie(
+            labels=size_counts.index.astype(str) + ' ETH',
+            values=size_counts.values,
+            hole=0.4,
+            marker=dict(colors=px.colors.sequential.Viridis),
+            textinfo='percent+label',
+            textfont=dict(size=11, color='white'),
+            hovertemplate="<b>%{label}</b><br>Count: %{value}<br>%{percent}<extra></extra>"
+        ))
+
+        fig_pie.update_layout(
+            height=300,
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='white'),
+            showlegend=False,
+            margin=dict(l=20, r=20, t=30, b=20)
+        )
+
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    # Recent Transfers Table
+    st.markdown("### 🔍 Recent Whale Transfers")
+
+    display_df = df.head(25).copy()
+    display_df['From'] = display_df['from_address'].apply(format_address)
+    display_df['To'] = display_df['to_address'].apply(format_address)
+    display_df['ETH'] = display_df['eth_amount'].apply(lambda x: f"{format_eth(x)} ETH")
+    display_df['Time'] = display_df['timestamp'].dt.strftime('%H:%M:%S')
+    display_df['Tx'] = display_df['transaction_hash'].apply(format_address)
+
+    st.dataframe(
+        display_df[['Time', 'ETH', 'From', 'To', 'Tx']],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            'Time': st.column_config.TextColumn('Time'),
+            'ETH': st.column_config.TextColumn('Amount'),
+            'From': st.column_config.TextColumn('From'),
+            'To': st.column_config.TextColumn('To'),
+            'Tx': st.column_config.TextColumn('Tx Hash')
+        }
+    )
+
     # Footer
     st.markdown("---")
     st.markdown(
-        "**Powered by [Amp](https://github.com/edgeandnode/amp)** - The blockchain native database | "
-        f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        f"<div style='text-align: center; color: #666;'>"
+        f"Powered by <a href='https://github.com/edgeandnode/amp' style='color: #00d4ff;'>Amp</a> | "
+        f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        f"</div>",
+        unsafe_allow_html=True
     )
-    
-    if auto_refresh:
-        st.markdown("🔄 *Auto-refreshing every 30 seconds...*")
 
 if __name__ == "__main__":
     main()
